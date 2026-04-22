@@ -16,6 +16,9 @@
   "users": [
     {
       "username": "testuser",
+      "email": "testuser@example.com",
+      "firstName": "test",
+      "lastName": "user",
       "enabled": true,
       "emailVerified": true,
       "credentials": [

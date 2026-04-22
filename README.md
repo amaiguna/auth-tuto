@@ -43,6 +43,15 @@ flowchart LR
 
 SPA 特有の話題（PKCE、トークン保管場所問題など）は、必要になった段階で vanilla JS の最小 SPA を足して扱う。
 
+## ドキュメント
+
+実装フェーズ完了ごとに `docs/` 配下に学習まとめを追記していく。
+
+| ファイル | 内容 |
+|---|---|
+| [docs/01-oidc-auth-code-flow.md](docs/01-oidc-auth-code-flow.md) | OIDC Authorization Code Flow、JWT 構造と検証クレーム |
+| [docs/02-session-cookie.md](docs/02-session-cookie.md) | セッション管理、Cookie の仕組みと HttpOnly 属性 |
+
 ## 進め方
 
 - 機能単位で一歩ずつ、動作確認しながら進める。
