@@ -13,10 +13,11 @@ import (
 )
 
 const (
-	keycloakBase = "http://localhost:8080/realms/auth-tuto"
-	clientID     = "echo-app"
-	clientSecret = "supersecret"
-	redirectURI  = "http://localhost:3000/callback"
+	keycloakBase          = "http://localhost:8080/realms/auth-tuto"
+	clientID              = "echo-app"
+	clientSecret          = "supersecret"
+	redirectURI           = "http://localhost:3000/callback"
+	postLogoutRedirectURI = "http://localhost:3000/loggedout"
 )
 
 type tokenResponse struct {
@@ -25,19 +26,22 @@ type tokenResponse struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
-type idTokenPayload struct {
+type sessionData struct {
 	Sub               string `json:"sub"`
 	PreferredUsername string `json:"preferred_username"`
+	IDToken           string `json:"id_token"`
 }
 
 // HACK: スレッドセーフでないのでsync.Mapに書き換え(必要なら)
-var sessions = map[string]idTokenPayload{}
+var sessions = map[string]sessionData{}
 
 func main() {
 	e := echo.New()
-	e.Use(middleware.Logger())
+	e.Use(middleware.RequestLogger())
 
 	e.GET("/login", handleLogin)
+	e.POST("/logout", handleLogout)
+	e.GET("/loggedout", handleLoggedout)
 	e.GET("/callback", handleCallback)
 	e.GET("/me", handleMe)
 
@@ -54,6 +58,42 @@ func handleLogin(c echo.Context) error {
 	q.Set("scope", "openid")
 	authURL.RawQuery = q.Encode()
 	return c.Redirect(http.StatusFound, authURL.String())
+}
+
+func handleLogout(c echo.Context) error {
+	sessionCookie, err := c.Cookie("session_id")
+
+	if err != nil {
+		return err
+	}
+
+	sessionData, ok := sessions[sessionCookie.Value]
+
+	if !ok {
+		return c.NoContent(http.StatusUnauthorized)
+	}
+
+	q := url.Values{}
+	q.Set("id_token_hint", sessionData.IDToken)
+	q.Set("post_logout_redirect_uri", postLogoutRedirectURI)
+	logoutURL, _ := url.Parse(keycloakBase + "/protocol/openid-connect/logout?" + q.Encode())
+
+	delete(sessions, sessionCookie.Value)
+
+	cookie := new(http.Cookie)
+	cookie.Name = "session_id"
+	cookie.Value = ""
+	cookie.MaxAge = -1
+	cookie.Path = "/"
+
+	c.SetCookie(cookie)
+
+	return c.Redirect(http.StatusFound, logoutURL.String())
+
+}
+
+func handleLoggedout(c echo.Context) error {
+	return c.String(http.StatusOK, "ログアウトしました")
 }
 
 func handleCallback(c echo.Context) error {
@@ -86,15 +126,17 @@ func handleCallback(c echo.Context) error {
 		return err
 	}
 
-	var payload idTokenPayload
-	err = json.Unmarshal(payloadBytes, &payload)
+	var sessionData sessionData
+	err = json.Unmarshal(payloadBytes, &sessionData)
 	if err != nil {
 		return err
 	}
 
+	sessionData.IDToken = tokens.IDToken
+
 	id := uuid.NewString()
 
-	sessions[id] = payload
+	sessions[id] = sessionData
 
 	cookie := new(http.Cookie)
 	cookie.Name = "session_id"
@@ -115,14 +157,14 @@ func handleMe(c echo.Context) error {
 		return err
 	}
 
-	payload, ok := sessions[sessionCookie.Value]
+	sessionData, ok := sessions[sessionCookie.Value]
 
 	if !ok {
 		return c.NoContent(http.StatusUnauthorized)
 	}
 
 	return c.JSON(http.StatusOK, map[string]any{
-		"name": payload.PreferredUsername,
+		"name": sessionData.PreferredUsername,
 	})
 
 }

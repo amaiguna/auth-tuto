@@ -10,6 +10,7 @@
       "secret": "supersecret",
       "standardFlowEnabled": true,
       "redirectUris": ["http://localhost:3000/callback"],
+      "attributes": { "post.logout.redirect.uris": "http://localhost:3000/*" },
       "webOrigins": ["+"]
     }
   ],
