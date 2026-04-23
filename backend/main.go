@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/google/uuid"
@@ -13,12 +14,27 @@ import (
 )
 
 const (
-	keycloakBase          = "http://localhost:8080/realms/auth-tuto"
 	clientID              = "echo-app"
 	clientSecret          = "supersecret"
 	redirectURI           = "http://localhost:3000/callback"
-	postLogoutRedirectURI = "http://localhost:3000/loggedout"
+	frontendOrigin        = "http://localhost:5173"
+	frontendTopURL        = frontendOrigin + "/"
+	postLogoutRedirectURI = frontendOrigin + "/loggedout"
 )
+
+// ブラウザから辿る URL と、バックエンド→Keycloak のサーバー間通信に使う URL を分けている。
+// docker compose で動かす時は Keycloak の内部 URL (http://keycloak:8080/...) を env で注入する。
+var (
+	keycloakAuthBase  = getenv("KEYCLOAK_AUTH_BASE", "http://localhost:8080/realms/auth-tuto")
+	keycloakTokenBase = getenv("KEYCLOAK_TOKEN_BASE", "http://localhost:8080/realms/auth-tuto")
+)
+
+func getenv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
 
 type tokenResponse struct {
 	AccessToken  string `json:"access_token"`
@@ -38,10 +54,14 @@ var sessions = map[string]sessionData{}
 func main() {
 	e := echo.New()
 	e.Use(middleware.RequestLogger())
+	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins:     []string{frontendOrigin},
+		AllowCredentials: true,
+		AllowMethods:     []string{http.MethodGet, http.MethodPost},
+	}))
 
 	e.GET("/login", handleLogin)
 	e.POST("/logout", handleLogout)
-	e.GET("/loggedout", handleLoggedout)
 	e.GET("/callback", handleCallback)
 	e.GET("/me", handleMe)
 
@@ -59,7 +79,7 @@ func handleLogin(c echo.Context) error {
 	}
 	c.SetCookie(cookie)
 
-	authURL, _ := url.Parse(keycloakBase + "/protocol/openid-connect/auth")
+	authURL, _ := url.Parse(keycloakAuthBase + "/protocol/openid-connect/auth")
 
 	q := authURL.Query()
 	q.Set("client_id", clientID)
@@ -75,7 +95,7 @@ func handleLogout(c echo.Context) error {
 	sessionCookie, err := c.Cookie("session_id")
 
 	if err != nil {
-		return err
+		return c.NoContent(http.StatusUnauthorized)
 	}
 
 	sessionData, ok := sessions[sessionCookie.Value]
@@ -84,7 +104,7 @@ func handleLogout(c echo.Context) error {
 		return c.NoContent(http.StatusUnauthorized)
 	}
 
-	logoutURL, _ := url.Parse(keycloakBase + "/protocol/openid-connect/logout")
+	logoutURL, _ := url.Parse(keycloakAuthBase + "/protocol/openid-connect/logout")
 	q := logoutURL.Query()
 	q.Set("id_token_hint", sessionData.IDToken)
 	q.Set("post_logout_redirect_uri", postLogoutRedirectURI)
@@ -106,10 +126,6 @@ func handleLogout(c echo.Context) error {
 
 }
 
-func handleLoggedout(c echo.Context) error {
-	return c.String(http.StatusOK, "ログアウトしました")
-}
-
 func handleCallback(c echo.Context) error {
 
 	stateFromQuery := c.QueryParam("state")
@@ -126,7 +142,7 @@ func handleCallback(c echo.Context) error {
 
 	code := c.QueryParam("code")
 
-	tokenURL, _ := url.Parse(keycloakBase + "/protocol/openid-connect/token")
+	tokenURL, _ := url.Parse(keycloakTokenBase + "/protocol/openid-connect/token")
 
 	resp, err := http.PostForm(tokenURL.String(), url.Values{
 		"grant_type":    {"authorization_code"},
@@ -174,7 +190,7 @@ func handleCallback(c echo.Context) error {
 
 	c.SetCookie(cookie)
 
-	return c.Redirect(http.StatusFound, "/me")
+	return c.Redirect(http.StatusFound, frontendTopURL)
 }
 
 func handleMe(c echo.Context) error {
@@ -182,7 +198,7 @@ func handleMe(c echo.Context) error {
 	sessionCookie, err := c.Cookie("session_id")
 
 	if err != nil {
-		return err
+		return c.NoContent(http.StatusUnauthorized)
 	}
 
 	sessionData, ok := sessions[sessionCookie.Value]

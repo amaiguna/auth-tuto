@@ -10,3 +10,35 @@ services:
     volumes:
       - ./keycloak:/opt/keycloak/data/import
     command: ["start-dev", "--import-realm"]
+
+  backend:
+    build: ./backend
+    container_name: auth-tuto-backend
+    working_dir: /app
+    volumes:
+      - ./backend:/app
+      - go-mod-cache:/go/pkg/mod
+    ports:
+      - "3000:3000"
+    environment:
+      KEYCLOAK_AUTH_BASE: "http://localhost:8080/realms/auth-tuto"
+      KEYCLOAK_TOKEN_BASE: "http://keycloak:8080/realms/auth-tuto"
+    depends_on:
+      - keycloak
+
+  frontend:
+    image: node:22-alpine
+    container_name: auth-tuto-frontend
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+      - frontend-node-modules:/app/node_modules
+    ports:
+      - "5173:5173"
+    command: ["sh", "-c", "npm install && npm run dev"]
+    depends_on:
+      - backend
+
+volumes:
+  go-mod-cache:
+  frontend-node-modules:

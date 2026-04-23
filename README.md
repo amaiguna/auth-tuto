@@ -14,34 +14,39 @@
 
 ## 構成
 
-3 者構成で進める：
+フロントエンドとバックエンドを分離した 4 者構成：
 
 ```mermaid
 flowchart LR
-    Browser[Browser] -->|1. login| RP[RP<br/>Go + Echo]
-    RP -->|2. redirect| IdP[IdP<br/>Keycloak]
-    Browser -->|3. authn| IdP
-    IdP -->|4. code| RP
-    RP -->|5. token exchange| IdP
-    Browser -->|6. API call w/ session| RS[Resource Server]
-    RS -.->|JWT 検証| RS
+    Browser[Browser] -->|1. アクセス| FE[Frontend SPA<br/>Vite :5173]
+    FE -->|2. fetch /me w/ Cookie| BE[Backend<br/>Go + Echo :3000]
+    Browser -->|3. /login へ遷移| BE
+    BE -->|4. authorize redirect| IdP[IdP<br/>Keycloak :8080]
+    Browser -->|5. authn| IdP
+    IdP -->|6. code| BE
+    BE -->|7. token exchange| IdP
+    BE -->|8. Set-Cookie + redirect| Browser
 ```
 
+- **Frontend (SPA)**: Vanilla JS + Vite (`frontend/`)。UI と fetch を担当
+- **Backend (RP)**: Go + Echo (`backend/`)。OIDC の中継、セッション管理、CSRF 対策のメイン実装先。JSON API
 - **IdP (OP)**: Keycloak を Docker で起動
-- **RP (クライアント)**: Go + Echo。認証フロー、Cookie 管理、CSRF 対策のメイン実装先
-- **Resource Server**: 当初は RP と同居。JWT 検証の勉強段階で分離を検討
+- **Resource Server**: 当初は Backend と同居。JWT 検証の勉強段階で分離を検討
+
+Frontend と Backend はクロスオリジン (`:5173` ↔ `:3000`) にしている。`SameSite` / `Origin` / CORS などの挙動を現実的な形で学習するため。
+
+全サービスを `docker compose up` 1 コマンドで起動できる。Backend は air によるホットリロード対応。
 
 ## 技術スタック
 
 | レイヤー | 選定 |
 | --- | --- |
-| 言語 | Go |
-| Web フレームワーク | [Echo](https://echo.labstack.com/) |
-| テンプレート | 標準 `html/template` |
+| Backend 言語 | Go |
+| Backend フレームワーク | [Echo](https://echo.labstack.com/) |
+| Frontend | Vanilla JS + [Vite](https://vite.dev/) |
 | IdP | Keycloak (Docker) |
-| フロント | サーバサイドレンダリング + 素の HTML/フォーム |
 
-SPA 特有の話題（PKCE、トークン保管場所問題など）は、必要になった段階で vanilla JS の最小 SPA を足して扱う。
+フレームワーク（React 等）は入れない。CSRF / Cookie / fetch 周りの挙動を最小構成で追えることを優先。
 
 ## ドキュメント
 
@@ -89,14 +94,29 @@ SPA 特有の話題（PKCE、トークン保管場所問題など）は、必要
 
 ### その他（優先度は都度判断）
 
+- [x] フロントエンドを SPA として分離（Vite + vanilla JS）
+- [x] 全サービスを docker compose に統合、backend を `backend/` へ移動
+- [x] air によるバックエンドホットリロード
+- [x] Keycloak URL を env var で分離（内部通信 vs ブラウザ向け redirect）
 - [ ] 設定値の環境変数化（今は main.go に直書き）
 - [ ] セッション map を `sync.Map` に置き換える
-- [ ] HTML テンプレート（`html/template`）で最低限の UI
-- [ ] PKCE（SPA シナリオの勉強時）
+- [ ] PKCE（SPA から IdP に直接アクセスする形態の勉強時）
 
 ### 認可（ずっと先）
 
 認証が固まってから着手。RBAC / ABAC / scope ベースなどを予定。
+
+## 起動方法
+
+```sh
+docker compose up
+```
+
+`http://localhost:5173/` へアクセス。
+
+- コード変更は air (backend) / Vite HMR (frontend) により自動リロード
+- Keycloak の realm 変更は `docker compose restart keycloak` が必要
+- 初回は backend イメージのビルドに時間がかかる (`docker compose build backend`)
 
 ## 進め方
 
