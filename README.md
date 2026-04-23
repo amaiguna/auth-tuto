@@ -51,6 +51,52 @@ SPA 特有の話題（PKCE、トークン保管場所問題など）は、必要
 |---|---|
 | [docs/01-oidc-auth-code-flow.md](docs/01-oidc-auth-code-flow.md) | OIDC Authorization Code Flow、JWT 構造と検証クレーム |
 | [docs/02-session-cookie.md](docs/02-session-cookie.md) | セッション管理、Cookie の仕組みと HttpOnly 属性 |
+| [docs/03-csrf-problems.md](docs/03-csrf-problems.md) | CSRF とは何か、典型的な被害、Login CSRF |
+
+## 学習ロードマップ
+
+走りながら決めるので前後・分岐あり。現状の想定順：
+
+### 認証の基礎（進行中）
+
+- [x] Keycloak を Docker で立てる（realm JSON で宣言的に）
+- [x] `/login` → Keycloak authorization endpoint へ redirect
+- [x] `/callback` で code を token exchange
+- [x] id_token の payload をパースしてユーザー識別
+- [x] session をサーバー側（インメモリ map）で管理、session_id を HttpOnly Cookie で保持
+- [x] `/me` で Cookie からユーザー情報を返す
+- [x] `/logout` で RP セッション削除 + Keycloak `end_session_endpoint` で IdP 側セッション終了
+- [x] `state` パラメータで Login CSRF 対策
+
+### CSRF 対策（次ここから）
+
+- [x] 問題の整理（docs/03）
+- [ ] SameSite 属性による防御と挙動確認
+- [ ] CSRF トークンによる明示的な対策（二重送信 Cookie パターンなど）
+- [ ] `/logout` 含む状態変更エンドポイントに CSRF トークン適用
+
+### JWT の扱い
+
+- [ ] id_token の署名検証（JWKS から公開鍵取得 → RS256 検証）
+- [ ] `iss` / `aud` / `exp` / `nonce` のクレーム検証
+- [ ] `nonce` パラメータ実装（replay 対策）
+- [ ] access_token の検証（Resource Server 分離時）
+
+### Resource Server 分離
+
+- [ ] 別プロセスとして Resource Server を立てる
+- [ ] `access_token` を Authorization ヘッダで受け取り検証する API
+
+### その他（優先度は都度判断）
+
+- [ ] 設定値の環境変数化（今は main.go に直書き）
+- [ ] セッション map を `sync.Map` に置き換える
+- [ ] HTML テンプレート（`html/template`）で最低限の UI
+- [ ] PKCE（SPA シナリオの勉強時）
+
+### 認可（ずっと先）
+
+認証が固まってから着手。RBAC / ABAC / scope ベースなどを予定。
 
 ## 進め方
 

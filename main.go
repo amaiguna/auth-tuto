@@ -49,6 +49,16 @@ func main() {
 }
 
 func handleLogin(c echo.Context) error {
+	state := uuid.NewString()
+
+	cookie := &http.Cookie{
+		Name:     "oauth_state",
+		Value:    state,
+		HttpOnly: true,
+		Path:     "/",
+	}
+	c.SetCookie(cookie)
+
 	authURL, _ := url.Parse(keycloakBase + "/protocol/openid-connect/auth")
 
 	q := authURL.Query()
@@ -56,6 +66,7 @@ func handleLogin(c echo.Context) error {
 	q.Set("redirect_uri", redirectURI)
 	q.Set("response_type", "code")
 	q.Set("scope", "openid")
+	q.Set("state", state)
 	authURL.RawQuery = q.Encode()
 	return c.Redirect(http.StatusFound, authURL.String())
 }
@@ -73,18 +84,21 @@ func handleLogout(c echo.Context) error {
 		return c.NoContent(http.StatusUnauthorized)
 	}
 
-	q := url.Values{}
+	logoutURL, _ := url.Parse(keycloakBase + "/protocol/openid-connect/logout")
+	q := logoutURL.Query()
 	q.Set("id_token_hint", sessionData.IDToken)
 	q.Set("post_logout_redirect_uri", postLogoutRedirectURI)
-	logoutURL, _ := url.Parse(keycloakBase + "/protocol/openid-connect/logout?" + q.Encode())
+
+	logoutURL.RawQuery = q.Encode()
 
 	delete(sessions, sessionCookie.Value)
 
-	cookie := new(http.Cookie)
-	cookie.Name = "session_id"
-	cookie.Value = ""
-	cookie.MaxAge = -1
-	cookie.Path = "/"
+	cookie := &http.Cookie{
+		Name:   "session_id",
+		Value:  "",
+		MaxAge: -1,
+		Path:   "/",
+	}
 
 	c.SetCookie(cookie)
 
@@ -97,6 +111,19 @@ func handleLoggedout(c echo.Context) error {
 }
 
 func handleCallback(c echo.Context) error {
+
+	stateFromQuery := c.QueryParam("state")
+	stateCookie, err := c.Cookie("oauth_state")
+	if err != nil || stateCookie.Value != stateFromQuery {
+		return c.NoContent(http.StatusBadRequest)
+	}
+
+	c.SetCookie(&http.Cookie{
+		Name:   "oauth_state",
+		MaxAge: -1,
+		Path:   "/",
+	})
+
 	code := c.QueryParam("code")
 
 	tokenURL, _ := url.Parse(keycloakBase + "/protocol/openid-connect/token")
@@ -138,11 +165,12 @@ func handleCallback(c echo.Context) error {
 
 	sessions[id] = sessionData
 
-	cookie := new(http.Cookie)
-	cookie.Name = "session_id"
-	cookie.Value = id
-	cookie.HttpOnly = true
-	cookie.Path = "/"
+	cookie := &http.Cookie{
+		Name:     "session_id",
+		Value:    id,
+		HttpOnly: true,
+		Path:     "/",
+	}
 
 	c.SetCookie(cookie)
 
