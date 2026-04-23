@@ -14,28 +14,54 @@
 
 ## 構成
 
-フロントエンドとバックエンドを分離した 4 者構成：
+Legit 側 (frontend + backend + IdP) と、攻撃者ページ (evil-frontend) を別サイトとして並立させる。
 
 ```mermaid
 flowchart LR
-    Browser[Browser] -->|1. アクセス| FE[Frontend SPA<br/>Vite :5173]
-    FE -->|2. fetch /me w/ Cookie| BE[Backend<br/>Go + Echo :3000]
-    Browser -->|3. /login へ遷移| BE
-    BE -->|4. authorize redirect| IdP[IdP<br/>Keycloak :8080]
-    Browser -->|5. authn| IdP
-    IdP -->|6. code| BE
-    BE -->|7. token exchange| IdP
-    BE -->|8. Set-Cookie + redirect| Browser
+    subgraph Legit["Legit (localhost)"]
+        FE[Frontend SPA<br/>Vite :5173]
+        BE[Backend<br/>Go + Echo :3000]
+        IdP[IdP<br/>Keycloak :8080]
+    end
+    subgraph Evil["Evil (127.0.0.1)"]
+        EVIL[Evil Frontend<br/>:5174]
+    end
+    Browser[Browser] --> FE
+    Browser --> EVIL
+    FE -->|fetch /me w/ Cookie| BE
+    Browser -->|redirect| BE
+    BE -->|authorize / token exchange| IdP
+    EVIL -.->|罠 form で POST| BE
 ```
 
 - **Frontend (SPA)**: Vanilla JS + Vite (`frontend/`)。UI と fetch を担当
 - **Backend (RP)**: Go + Echo (`backend/`)。OIDC の中継、セッション管理、CSRF 対策のメイン実装先。JSON API
 - **IdP (OP)**: Keycloak を Docker で起動
+- **Evil frontend**: busybox httpd で静的 HTML を serve (`evil-frontend/`)。攻撃ページを置く
 - **Resource Server**: 当初は Backend と同居。JWT 検証の勉強段階で分離を検討
 
 Frontend と Backend はクロスオリジン (`:5173` ↔ `:3000`) にしている。`SameSite` / `Origin` / CORS などの挙動を現実的な形で学習するため。
 
 全サービスを `docker compose up` 1 コマンドで起動できる。Backend は air によるホットリロード対応。
+
+## 攻撃 / 防御サイクル
+
+CSRF などの攻撃対策は **「まず攻撃が成立することを確認 → 対策を入れて封じる」** のサイクルで進める。そのために罠ページ専用の origin として `evil-frontend` を立てている。
+
+| 役割 | アクセス先 |
+|---|---|
+| 被害者が使う legit サイト | `http://localhost:5173` |
+| 攻撃者の罠サイト | `http://127.0.0.1:5174` |
+
+`localhost` と `127.0.0.1` は**ブラウザから見ると別サイト** (eTLD+1 が一致しない) として扱われるため、`/etc/hosts` を編集することなく SameSite Cookie などのクロスサイト防御の挙動確認ができる。
+
+進め方:
+
+1. legit サイトでログインしておく
+2. 罠サイト (`http://127.0.0.1:5174`) を開き、攻撃が成立することを確認
+3. 対策を実装
+4. 同じ罠で攻撃が通らなくなることを確認
+5. 学習ドキュメントを `docs/` に追記
 
 ## 技術スタック
 
@@ -44,6 +70,7 @@ Frontend と Backend はクロスオリジン (`:5173` ↔ `:3000`) にしてい
 | Backend 言語 | Go |
 | Backend フレームワーク | [Echo](https://echo.labstack.com/) |
 | Frontend | Vanilla JS + [Vite](https://vite.dev/) |
+| Evil frontend | 静的 HTML + busybox httpd |
 | IdP | Keycloak (Docker) |
 
 フレームワーク（React 等）は入れない。CSRF / Cookie / fetch 周りの挙動を最小構成で追えることを優先。

