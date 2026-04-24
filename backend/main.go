@@ -76,6 +76,7 @@ func handleLogin(c echo.Context) error {
 		Value:    state,
 		HttpOnly: true,
 		Path:     "/",
+		SameSite: http.SameSiteLaxMode,
 	}
 	c.SetCookie(cookie)
 
@@ -114,10 +115,11 @@ func handleLogout(c echo.Context) error {
 	delete(sessions, sessionCookie.Value)
 
 	cookie := &http.Cookie{
-		Name:   "session_id",
-		Value:  "",
-		MaxAge: -1,
-		Path:   "/",
+		Name:     "session_id",
+		Value:    "",
+		MaxAge:   -1,
+		Path:     "/",
+		SameSite: http.SameSiteLaxMode,
 	}
 
 	c.SetCookie(cookie)
@@ -186,6 +188,7 @@ func handleCallback(c echo.Context) error {
 		Value:    id,
 		HttpOnly: true,
 		Path:     "/",
+		SameSite: http.SameSiteLaxMode,
 	}
 
 	c.SetCookie(cookie)

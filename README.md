@@ -84,6 +84,7 @@ CSRF などの攻撃対策は **「まず攻撃が成立することを確認 �
 | [docs/01-oidc-auth-code-flow.md](docs/01-oidc-auth-code-flow.md) | OIDC Authorization Code Flow、JWT 構造と検証クレーム |
 | [docs/02-session-cookie.md](docs/02-session-cookie.md) | セッション管理、Cookie の仕組みと HttpOnly 属性 |
 | [docs/03-csrf-problems.md](docs/03-csrf-problems.md) | CSRF とは何か、典型的な被害、Login CSRF |
+| [docs/04-samesite-cookie.md](docs/04-samesite-cookie.md) | SameSite Cookie による CSRF 対策、Lax / Strict / None の違い |
 
 ## 学習ロードマップ
 
@@ -100,11 +101,13 @@ CSRF などの攻撃対策は **「まず攻撃が成立することを確認 �
 - [x] `/logout` で RP セッション削除 + Keycloak `end_session_endpoint` で IdP 側セッション終了
 - [x] `state` パラメータで Login CSRF 対策
 
-### CSRF 対策（次ここから）
+### CSRF 対策（進行中）
 
 - [x] 問題の整理（docs/03）
-- [ ] SameSite 属性による防御と挙動確認
-- [ ] CSRF トークンによる明示的な対策（二重送信 Cookie パターンなど）
+- [x] SameSite 属性による防御と挙動確認（docs/04）
+- [ ] Synchronizer Token パターン（サーバー側で CSRF トークン管理）
+- [ ] Double Submit Cookie パターン
+- [ ] Origin / Referer ヘッダ検証
 - [ ] `/logout` 含む状態変更エンドポイントに CSRF トークン適用
 
 ### JWT の扱い
