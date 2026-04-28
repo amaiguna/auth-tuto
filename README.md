@@ -85,6 +85,7 @@ CSRF などの攻撃対策は **「まず攻撃が成立することを確認 �
 | [docs/02-session-cookie.md](docs/02-session-cookie.md) | セッション管理、Cookie の仕組みと HttpOnly 属性 |
 | [docs/03-csrf-problems.md](docs/03-csrf-problems.md) | CSRF とは何か、典型的な被害、Login CSRF |
 | [docs/04-samesite-cookie.md](docs/04-samesite-cookie.md) | SameSite Cookie による CSRF 対策、Lax / Strict / None の違い |
+| [docs/05-synchronizer-token.md](docs/05-synchronizer-token.md) | Synchronizer Token パターン、SOP/CORS 前提の多層防御 |
 
 ## 学習ロードマップ
 
@@ -105,10 +106,11 @@ CSRF などの攻撃対策は **「まず攻撃が成立することを確認 �
 
 - [x] 問題の整理（docs/03）
 - [x] SameSite 属性による防御と挙動確認（docs/04）
-- [ ] Synchronizer Token パターン（サーバー側で CSRF トークン管理）
+- [x] Synchronizer Token パターン（サーバー側で CSRF トークン管理）（docs/05）
+- [x] `/logout` への CSRF トークン適用（他の状態変更エンドポイントは追加時に対応）
 - [ ] Double Submit Cookie パターン
 - [ ] Origin / Referer ヘッダ検証
-- [ ] `/logout` 含む状態変更エンドポイントに CSRF トークン適用
+- [ ] 検証ミドルウェア化 / セッション解決の共通化
 
 ### JWT の扱い
 

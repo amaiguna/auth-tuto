@@ -1,14 +1,23 @@
 const API = 'http://localhost:3000'
 const app = document.getElementById('app')
 
+// CSRF トークンはセッション中だけ有効な秘密値。XSS 経由で抜かれないよう
+// localStorage に入れず、モジュールスコープのメモリ変数で保持する。
+// ページリロードや再ログインのたびに /csrf-token から取り直す。
+let csrfToken = null
+
 async function route() {
   if (window.location.pathname === '/loggedout') {
     renderLoggedOut()
     return
   }
   const me = await fetchMe()
-  if (me) renderLoggedIn(me)
-  else renderAnonymous()
+  if (!me) {
+    renderAnonymous()
+    return
+  }
+  csrfToken = await fetchCsrfToken()
+  renderLoggedIn(me)
 }
 
 async function fetchMe() {
@@ -19,6 +28,13 @@ async function fetchMe() {
   } catch {
     return null
   }
+}
+
+async function fetchCsrfToken() {
+  const res = await fetch(`${API}/csrf-token`, { credentials: 'include' })
+  if (!res.ok) return null
+  const data = await res.json()
+  return data.csrf_token
 }
 
 function renderLoggedIn(me) {
@@ -51,13 +67,21 @@ function renderLoggedOut() {
   `
 }
 
-function logout() {
-  // POST + redirect chain (Keycloak end_session → :5173/loggedout) を辿らせるため form 送信で遷移させる
-  const form = document.createElement('form')
-  form.method = 'POST'
-  form.action = `${API}/logout`
-  document.body.appendChild(form)
-  form.submit()
+async function logout() {
+  // form 送信ではカスタムヘッダを付けられないので fetch に変更。
+  // サーバーは Keycloak end_session の URL を JSON で返してくるので、
+  // それを受け取ってから location.href で top-level 遷移を行う。
+  const res = await fetch(`${API}/logout`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'X-CSRF-Token': csrfToken },
+  })
+  if (!res.ok) {
+    console.error('logout failed', res.status)
+    return
+  }
+  const { logout_url } = await res.json()
+  window.location.href = logout_url
 }
 
 route()

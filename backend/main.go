@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -46,6 +47,7 @@ type sessionData struct {
 	Sub               string `json:"sub"`
 	PreferredUsername string `json:"preferred_username"`
 	IDToken           string `json:"id_token"`
+	CSRFToken         string `json:"-"`
 }
 
 // HACK: スレッドセーフでないのでsync.Mapに書き換え(必要なら)
@@ -63,6 +65,7 @@ func main() {
 	e.GET("/login", handleLogin)
 	e.POST("/logout", handleLogout)
 	e.GET("/callback", handleCallback)
+	e.GET("/csrf-token", handleCSRF)
 	e.GET("/me", handleMe)
 
 	e.Start(":3000")
@@ -105,6 +108,13 @@ func handleLogout(c echo.Context) error {
 		return c.NoContent(http.StatusUnauthorized)
 	}
 
+	csrfToken := c.Request().Header.Get("X-CSRF-Token")
+	expected := sessionData.CSRFToken
+
+	if csrfToken == "" || subtle.ConstantTimeCompare([]byte(csrfToken), []byte(expected)) != 1 {
+		return c.NoContent(http.StatusForbidden)
+	}
+
 	logoutURL, _ := url.Parse(keycloakAuthBase + "/protocol/openid-connect/logout")
 	q := logoutURL.Query()
 	q.Set("id_token_hint", sessionData.IDToken)
@@ -124,7 +134,9 @@ func handleLogout(c echo.Context) error {
 
 	c.SetCookie(cookie)
 
-	return c.Redirect(http.StatusFound, logoutURL.String())
+	return c.JSON(http.StatusOK, map[string]any{
+		"logout_url": logoutURL.String(),
+	})
 
 }
 
@@ -178,6 +190,7 @@ func handleCallback(c echo.Context) error {
 	}
 
 	sessionData.IDToken = tokens.IDToken
+	sessionData.CSRFToken = uuid.NewString()
 
 	id := uuid.NewString()
 
@@ -194,6 +207,26 @@ func handleCallback(c echo.Context) error {
 	c.SetCookie(cookie)
 
 	return c.Redirect(http.StatusFound, frontendTopURL)
+}
+
+func handleCSRF(c echo.Context) error {
+
+	sessionCookie, err := c.Cookie("session_id")
+
+	if err != nil {
+		return c.NoContent(http.StatusUnauthorized)
+	}
+
+	sessionData, ok := sessions[sessionCookie.Value]
+
+	if !ok {
+		return c.NoContent(http.StatusUnauthorized)
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"csrf_token": sessionData.CSRFToken,
+	})
+
 }
 
 func handleMe(c echo.Context) error {
