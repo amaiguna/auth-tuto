@@ -21,6 +21,9 @@ const (
 	frontendOrigin        = "http://localhost:5173"
 	frontendTopURL        = frontendOrigin + "/"
 	postLogoutRedirectURI = frontendOrigin + "/loggedout"
+
+	ctxKeySession   = "session"
+	ctxKeySessionId = "session_id"
 )
 
 // ブラウザから辿る URL と、バックエンド→Keycloak のサーバー間通信に使う URL を分けている。
@@ -63,10 +66,10 @@ func main() {
 	}))
 
 	e.GET("/login", handleLogin)
-	e.POST("/logout", handleLogout)
+	e.POST("/logout", handleLogout, RequireSession, RequireCSRF)
 	e.GET("/callback", handleCallback)
-	e.GET("/csrf-token", handleCSRF)
-	e.GET("/me", handleMe)
+	e.GET("/csrf-token", handleCSRF, RequireSession)
+	e.GET("/me", handleMe, RequireSession)
 
 	e.Start(":3000")
 }
@@ -96,33 +99,18 @@ func handleLogin(c echo.Context) error {
 }
 
 func handleLogout(c echo.Context) error {
-	sessionCookie, err := c.Cookie("session_id")
 
-	if err != nil {
-		return c.NoContent(http.StatusUnauthorized)
-	}
-
-	sessionData, ok := sessions[sessionCookie.Value]
-
-	if !ok {
-		return c.NoContent(http.StatusUnauthorized)
-	}
-
-	csrfToken := c.Request().Header.Get("X-CSRF-Token")
-	expected := sessionData.CSRFToken
-
-	if csrfToken == "" || subtle.ConstantTimeCompare([]byte(csrfToken), []byte(expected)) != 1 {
-		return c.NoContent(http.StatusForbidden)
-	}
+	sd := c.Get(ctxKeySession).(sessionData)
 
 	logoutURL, _ := url.Parse(keycloakAuthBase + "/protocol/openid-connect/logout")
 	q := logoutURL.Query()
-	q.Set("id_token_hint", sessionData.IDToken)
+	q.Set("id_token_hint", sd.IDToken)
 	q.Set("post_logout_redirect_uri", postLogoutRedirectURI)
 
 	logoutURL.RawQuery = q.Encode()
 
-	delete(sessions, sessionCookie.Value)
+	sessionID := c.Get(ctxKeySessionId).(string)
+	delete(sessions, sessionID)
 
 	cookie := &http.Cookie{
 		Name:     "session_id",
@@ -183,18 +171,18 @@ func handleCallback(c echo.Context) error {
 		return err
 	}
 
-	var sessionData sessionData
-	err = json.Unmarshal(payloadBytes, &sessionData)
+	var sd sessionData
+	err = json.Unmarshal(payloadBytes, &sd)
 	if err != nil {
 		return err
 	}
 
-	sessionData.IDToken = tokens.IDToken
-	sessionData.CSRFToken = uuid.NewString()
+	sd.IDToken = tokens.IDToken
+	sd.CSRFToken = uuid.NewString()
 
 	id := uuid.NewString()
 
-	sessions[id] = sessionData
+	sessions[id] = sd
 
 	cookie := &http.Cookie{
 		Name:     "session_id",
@@ -211,40 +199,57 @@ func handleCallback(c echo.Context) error {
 
 func handleCSRF(c echo.Context) error {
 
-	sessionCookie, err := c.Cookie("session_id")
-
-	if err != nil {
-		return c.NoContent(http.StatusUnauthorized)
-	}
-
-	sessionData, ok := sessions[sessionCookie.Value]
-
-	if !ok {
-		return c.NoContent(http.StatusUnauthorized)
-	}
+	sd := c.Get(ctxKeySession).(sessionData)
 
 	return c.JSON(http.StatusOK, map[string]any{
-		"csrf_token": sessionData.CSRFToken,
+		"csrf_token": sd.CSRFToken,
 	})
 
 }
 
 func handleMe(c echo.Context) error {
 
-	sessionCookie, err := c.Cookie("session_id")
-
-	if err != nil {
-		return c.NoContent(http.StatusUnauthorized)
-	}
-
-	sessionData, ok := sessions[sessionCookie.Value]
-
-	if !ok {
-		return c.NoContent(http.StatusUnauthorized)
-	}
+	sd := c.Get(ctxKeySession).(sessionData)
 
 	return c.JSON(http.StatusOK, map[string]any{
-		"name": sessionData.PreferredUsername,
+		"name": sd.PreferredUsername,
 	})
 
+}
+
+func RequireSession(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		sessionCookie, err := c.Cookie("session_id")
+
+		if err != nil {
+			return c.NoContent(http.StatusUnauthorized)
+		}
+
+		sd, ok := sessions[sessionCookie.Value]
+
+		if !ok {
+			return c.NoContent(http.StatusUnauthorized)
+		}
+
+		c.Set(ctxKeySession, sd)
+		c.Set(ctxKeySessionId, sessionCookie.Value)
+
+		return next(c)
+
+	}
+}
+
+func RequireCSRF(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+
+		sd := c.Get(ctxKeySession).(sessionData)
+		gotCSRF := c.Request().Header.Get("X-CSRF-Token")
+		wantCSRF := sd.CSRFToken
+
+		if gotCSRF == "" || subtle.ConstantTimeCompare([]byte(gotCSRF), []byte(wantCSRF)) != 1 {
+			return c.NoContent(http.StatusForbidden)
+		}
+
+		return next(c)
+	}
 }
