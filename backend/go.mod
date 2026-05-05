@@ -1,4 +1,4 @@
-module github.com/amaiguna/auth-tuto
+module github.com/gyopei/auth-tuto
 
 go 1.26.2
 
