@@ -1,0 +1,6 @@
+[mcp_servers.mcp-obsidian]
+command = "uv"
+args = ["--directory", "/home/amag/work/sandbox/mcp-obsidian", "run", "mcp-obsidian"]
+
+[mcp_servers.mcp-obsidian.env]
+MCP_OBSIDIAN_VAULT = "/home/amag/obsidian/arch"

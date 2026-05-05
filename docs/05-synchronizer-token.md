@@ -89,10 +89,10 @@ sessionData.CSRFToken = uuid.NewString()
 取得用エンドポイント:
 
 ```go
-e.GET("/csrf-token", handleCSRF)
+e.GET("/csrf-token", handleCSRF, RequireSession)
 ```
 
-`handleCSRF` は `session_id` Cookie を検証してからトークンを JSON で返す。未ログインには 401。
+`handleCSRF` は `RequireSession` で `session_id` Cookie を検証してからトークンを JSON で返す。未ログインには 401。
 
 **なぜ `json:"-"`**: `sessionData` は ID Token の payload を `json.Unmarshal` する対象にも使われている。将来 Keycloak が `csrf_token` クレームを返したら意図せず上書きされるのを避けるため。本来は「ID Token クレーム用の struct」と「セッションデータ用の struct」を分けるのが筋（TODO）。
 
@@ -100,23 +100,28 @@ e.GET("/csrf-token", handleCSRF)
 
 ### Phase 2: サーバー側の検証 ✅
 
-`handleLogout` の冒頭にインライン実装。
+状態変更エンドポイントに付ける `RequireCSRF` ミドルウェアとして実装。`RequireSession` で解決済みのセッションを使い、`X-CSRF-Token` ヘッダとセッション内のトークンを照合する。
 
 ```go
-csrfToken := c.Request().Header.Get("X-CSRF-Token")
-expected := sessionData.CSRFToken
+e.POST("/logout", handleLogout, RequireSession, RequireCSRF)
+```
 
-if csrfToken == "" || subtle.ConstantTimeCompare([]byte(csrfToken), []byte(expected)) != 1 {
+```go
+sd := c.Get(ctxKeySession).(sessionData)
+gotCSRF := c.Request().Header.Get("X-CSRF-Token")
+wantCSRF := sd.CSRFToken
+
+if gotCSRF == "" || subtle.ConstantTimeCompare([]byte(gotCSRF), []byte(wantCSRF)) != 1 {
     return c.NoContent(http.StatusForbidden)
 }
 ```
 
 ポイント:
 
-- **ヘッダから取る (`Header.Get`)**: Cookie から取るパターン (Double Submit Cookie / docs/06) は別物。Synchronizer Token は「Cookie 以外の経路でも証明させる」が本質なので、ヘッダ読みでなければ意味がない。
+- **ヘッダから取る (`Header.Get`)**: Cookie から取るパターン (Double Submit Cookie) は別物。Synchronizer Token は「Cookie 以外の経路でも証明させる」が本質なので、ヘッダ読みでなければ意味がない。
 - **`subtle.ConstantTimeCompare` を使う**: 秘密値の比較でタイミング攻撃を防ぐ定数時間比較。戻り値は `int` (1 = 等しい / 0 = 異なる or 長さ違い)、`!= 1` 判定が定型。本ケース (ランダム UUID) では現実的な攻撃にはならないが、HMAC 検証や API キー比較で必要になる作法を体に入れる目的。
-- **空文字早期 return**: `csrfToken == ""` は subtle 側でも長さ違いで弾けるので冗長。だが攻撃者が常に観測できる情報なのでタイミング情報の漏洩にはならず、可読性のため残してある。
-- **ミドルウェア化していない**: CLAUDE.md の「まず自分で書いて挙動を理解 → 標準実装に置き換え」方針に従い、まず handler 内に直書き。`handleLogout` / `handleCSRF` / `handleMe` のセッション解決重複も含めて、ミドルウェア化は後回し。
+- **空文字早期 return**: `gotCSRF == ""` は subtle 側でも長さ違いで弾けるので冗長。だが攻撃者が常に観測できる情報なのでタイミング情報の漏洩にはならず、可読性のため残してある。
+- **`RequireSession` と分離**: セッション解決は `RequireSession`、CSRF 検証は `RequireCSRF` に分ける。`RequireCSRF` は `ctxKeySession` を前提にするので、状態変更エンドポイントでは `RequireSession` → `RequireCSRF` の順で付ける。
 
 ### Phase 3: フロントエンド側の取得 & 送信 ✅
 
@@ -258,14 +263,14 @@ sequenceDiagram
 
 - **`Cache-Control: no-store` 未設定**: `/csrf-token` はユーザー別の秘密値を返す GET API。中間プロキシやブラウザキャッシュに乗ると別ユーザーに漏れる。本番では必須
 - **トークンのローテーション未実装**: 現状はセッション生存期間中ずっと同じトークン。教科書的にはログイン直後や権限昇格時にローテーションして漏洩時の被害を最小化する
-- **検証ミドルウェア化**: 現状は `handleLogout` 内にインライン直書き。状態変更系メソッド (`POST` / `PUT` / `PATCH` / `DELETE`) に対して横断的に効かせるならミドルウェア化が必要
-- **セッション解決の重複**: `handleLogout` / `handleCSRF` / `handleMe` が同じ `session_id` Cookie 検証 → map lookup を繰り返している。検証ミドルウェアと合わせて寄せたい
+- **状態変更エンドポイントへの適用ルール**: 現状の状態変更は `/logout` のみ。今後 `POST` / `PUT` / `PATCH` / `DELETE` を追加する場合は、原則 `RequireSession` と `RequireCSRF` を付ける
 - **`sessionData` struct の責務混在**: ID Token クレームのパース先とセッション状態保持を同じ struct で兼ねている。本来は分けるべき
 - **`sessions` map のスレッド安全性**: 既存 TODO。`sync.Map` か `sync.RWMutex` 化
 - **トークンの失効タイミング**: セッション削除時に一緒に消えるだけ。セッション内で明示的に使い捨てる (one-time token) 方式は取っていない
 
 ## 次のフェーズ
 
-- **docs/06**: Double Submit Cookie パターン。Synchronizer Token のサーバー側状態保持 vs ステートレスな Double Submit のトレードオフ
-- **Origin / Referer ヘッダ検証**: fetch / form 共通で改ざん不可な情報による絞り込み (もう一枚の層)
-- 認証系が固まったら JWT 署名検証 (JWKS / RS256) → Resource Server 分離 → access_token 検証 → PKCE の順を予定
+- **docs/06**: JWT 署名検証。JWKS から公開鍵を取得し、ID Token を RS256 で検証する
+- **Origin / Referer ヘッダ検証**: fetch / form 共通で改ざん不可な情報による絞り込み (CSRF 防御のもう一枚の層)
+- **Double Submit Cookie パターン**: Synchronizer Token のサーバー側状態保持とのトレードオフ比較として後続候補
+- Resource Server 分離 → access_token 検証 → PKCE の順を予定
