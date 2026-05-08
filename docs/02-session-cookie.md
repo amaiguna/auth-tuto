@@ -19,7 +19,7 @@ sequenceDiagram
 
     RP->>RP: token を受け取り、サーバー内に保管
     RP->>RP: session ID (UUID) を生成
-    RP->>Browser: Set-Cookie: session_id=<uuid>; HttpOnly
+    RP->>Browser: Set-Cookie: session_id=<uuid>#59; HttpOnly
     Browser->>RP: GET /me（Cookie: session_id=<uuid> が自動で付く）
     RP->>RP: sessions[uuid] からユーザー情報を取り出す
     RP->>Browser: ユーザー情報を返す
@@ -44,21 +44,21 @@ sequenceDiagram
 
 ### 主な属性
 
-| 属性 | 意味 |
-|---|---|
-| `HttpOnly` | JS から `document.cookie` で読めなくなる。XSS 対策の核心 |
-| `Secure` | HTTPS のときだけ送信される |
-| `SameSite` | 別ドメインからのリクエストに Cookie を付けるか制御。CSRF 対策 |
-| `Path` | どのパスへのリクエストに付けるか |
-| `Expires` / `Max-Age` | 有効期限 |
+| 属性                  | 意味                                                          |
+| --------------------- | ------------------------------------------------------------- |
+| `HttpOnly`            | JS から `document.cookie` で読めなくなる。XSS 対策の核心      |
+| `Secure`              | HTTPS のときだけ送信される                                    |
+| `SameSite`            | 別ドメインからのリクエストに Cookie を付けるか制御。CSRF 対策 |
+| `Path`                | どのパスへのリクエストに付けるか                              |
+| `Expires` / `Max-Age` | 有効期限                                                      |
 
 ### Cookie vs localStorage
 
-| | HttpOnly Cookie | localStorage |
-|---|---|---|
-| JS から読めるか | 読めない | 読める（XSS で盗まれる） |
-| リクエストに自動で付くか | 付く | 付かない（JS で明示的に送る必要あり） |
-| CSRF のリスク | ある（自動で付くゆえに） | ない |
+|                          | HttpOnly Cookie          | localStorage                          |
+| ------------------------ | ------------------------ | ------------------------------------- |
+| JS から読めるか          | 読めない                 | 読める（XSS で盗まれる）              |
+| リクエストに自動で付くか | 付く                     | 付かない（JS で明示的に送る必要あり） |
+| CSRF のリスク            | ある（自動で付くゆえに） | ない                                  |
 
 ---
 
@@ -123,6 +123,7 @@ payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
 ```
 
 `RawURLEncoding` を使う理由：
+
 - `Raw` = `=` パディングなし
 - `URL` = `+` `/` の代わりに `-` `_` を使う
 
@@ -149,8 +150,8 @@ err チェックより前に `defer resp.Body.Close()` を書くと、`resp` が
 
 ## この時点のエンドポイント構成
 
-| エンドポイント | 処理 |
-|---|---|
-| `GET /login` | Keycloak の authorization endpoint へ redirect |
+| エンドポイント  | 処理                                                                     |
+| --------------- | ------------------------------------------------------------------------ |
+| `GET /login`    | Keycloak の authorization endpoint へ redirect                           |
 | `GET /callback` | code → token exchange → session 生成 → Cookie セット → `/me` へ redirect |
-| `GET /me` | Cookie の session_id からユーザー情報を返す |
+| `GET /me`       | Cookie の session_id からユーザー情報を返す                              |
