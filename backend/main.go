@@ -1,13 +1,18 @@
 package main
 
 import (
+	"crypto"
+	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"math/big"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -40,10 +45,37 @@ func getenv(key, fallback string) string {
 	return fallback
 }
 
+type jwtHeader struct {
+	Alg string `json:"alg"`
+	Typ string `json:"typ"`
+	Kid string `json:"kid"`
+}
+
+type jwks struct {
+	Keys []jwk `json:"keys"`
+}
+
+type jwk struct {
+	Kid string `json:"kid"`
+	Kty string `json:"kty"`
+	Alg string `json:"alg"`
+	Use string `json:"use"`
+	N   string `json:"n"`
+	E   string `json:"e"`
+}
+
 type tokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	IDToken      string `json:"id_token"`
 	RefreshToken string `json:"refresh_token"`
+}
+
+type idTokenClaims struct {
+	Sub               string `json:"sub"`
+	Iss               string `json:"iss"`
+	Aud               string `json:"aud"`
+	Exp               int64  `json:"exp"`
+	PreferredUsername string `json:"preferred_username"`
 }
 
 type sessionData struct {
@@ -159,6 +191,10 @@ func handleCallback(c echo.Context) error {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		return c.NoContent(http.StatusBadGateway)
+	}
+
 	var tokens tokenResponse
 	err = json.NewDecoder(resp.Body).Decode(&tokens)
 	if err != nil {
@@ -166,19 +202,140 @@ func handleCallback(c echo.Context) error {
 	}
 
 	parts := strings.Split(tokens.IDToken, ".")
+	if len(parts) != 3 {
+		return c.NoContent(http.StatusBadRequest)
+	}
+
+	var header jwtHeader
+	headerBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(headerBytes, &header)
+	if err != nil {
+		return err
+	}
+
+	if header.Alg != "RS256" {
+		return c.NoContent(http.StatusBadRequest)
+	}
+
+	if header.Kid == "" {
+		return c.NoContent(http.StatusBadRequest)
+	}
+
 	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
 		return err
 	}
 
-	var sd sessionData
-	err = json.Unmarshal(payloadBytes, &sd)
+	var claims idTokenClaims
+	err = json.Unmarshal(payloadBytes, &claims)
 	if err != nil {
 		return err
 	}
 
-	sd.IDToken = tokens.IDToken
-	sd.CSRFToken = uuid.NewString()
+	signatureBytes, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		return err
+	}
+
+	publicKeyURL, _ := url.Parse(keycloakTokenBase + "/protocol/openid-connect/certs")
+
+	jwksResp, err := http.Get(publicKeyURL.String())
+	if err != nil {
+		return err
+	}
+	defer jwksResp.Body.Close()
+
+	if jwksResp.StatusCode != http.StatusOK {
+		return c.NoContent(http.StatusBadGateway)
+	}
+
+	var keySet jwks
+	err = json.NewDecoder(jwksResp.Body).Decode(&keySet)
+	if err != nil {
+		return err
+	}
+
+	var matchedKey *jwk
+	for i := range keySet.Keys {
+		key := &keySet.Keys[i]
+		if key.Kid == header.Kid {
+			matchedKey = key
+			break
+		}
+	}
+
+	if matchedKey == nil {
+		return c.NoContent(http.StatusUnauthorized)
+	}
+
+	if matchedKey.Kty != "RSA" {
+		return c.NoContent(http.StatusUnauthorized)
+	}
+
+	if matchedKey.Alg != "" && matchedKey.Alg != "RS256" {
+		return c.NoContent(http.StatusUnauthorized)
+	}
+
+	if matchedKey.Use != "" && matchedKey.Use != "sig" {
+		return c.NoContent(http.StatusUnauthorized)
+	}
+
+	nBytes, err := base64.RawURLEncoding.DecodeString(matchedKey.N)
+	if err != nil {
+		return err
+	}
+
+	eBytes, err := base64.RawURLEncoding.DecodeString(matchedKey.E)
+	if err != nil {
+		return err
+	}
+
+	modulus := new(big.Int).SetBytes(nBytes)
+
+	exponent := 0
+	for _, b := range eBytes {
+		exponent = exponent<<8 + int(b)
+	}
+
+	if modulus.Sign() <= 0 || exponent == 0 {
+		return c.NoContent(http.StatusUnauthorized)
+	}
+
+	publicKey := &rsa.PublicKey{
+		N: modulus,
+		E: exponent,
+	}
+
+	signingInput := parts[0] + "." + parts[1]
+	hashed := sha256.Sum256([]byte(signingInput))
+
+	err = rsa.VerifyPKCS1v15(publicKey, crypto.SHA256, hashed[:], signatureBytes)
+	if err != nil {
+		return c.NoContent(http.StatusUnauthorized)
+	}
+
+	if claims.Iss != keycloakAuthBase {
+		return c.NoContent(http.StatusUnauthorized)
+	}
+
+	if claims.Aud != clientID {
+		return c.NoContent(http.StatusUnauthorized)
+	}
+
+	if claims.Exp <= time.Now().Unix() {
+		return c.NoContent(http.StatusUnauthorized)
+	}
+
+	sd := sessionData{
+		Sub:               claims.Sub,
+		PreferredUsername: claims.PreferredUsername,
+		IDToken:           tokens.IDToken,
+		CSRFToken:         uuid.NewString(),
+	}
 
 	id := uuid.NewString()
 
