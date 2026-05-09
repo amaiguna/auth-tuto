@@ -86,7 +86,7 @@ CSRF などの攻撃対策は **「まず攻撃が成立することを確認 �
 | [docs/03-csrf-problems.md](docs/03-csrf-problems.md) | CSRF とは何か、典型的な被害、Login CSRF |
 | [docs/04-samesite-cookie.md](docs/04-samesite-cookie.md) | SameSite Cookie による CSRF 対策、Lax / Strict / None の違い |
 | [docs/05-synchronizer-token.md](docs/05-synchronizer-token.md) | Synchronizer Token パターン、SOP/CORS 前提の多層防御 |
-| [docs/06-jwt-verification.md](docs/06-jwt-verification.md) | JWT 署名検証 (概念編)、JWKS、非対称鍵、RS256、HTTPS との違い |
+| [docs/06-jwt-verification.md](docs/06-jwt-verification.md) | JWT 署名検証、JWKS、RS256、`iss` / `aud` / `exp` 検証 |
 
 ## 学習ロードマップ
 
@@ -115,8 +115,8 @@ CSRF などの攻撃対策は **「まず攻撃が成立することを確認 �
 
 ### JWT の扱い
 
-- [ ] id_token の署名検証（JWKS から公開鍵取得 → RS256 検証）
-- [ ] `iss` / `aud` / `exp` / `nonce` のクレーム検証
+- [x] id_token の署名検証（JWKS から公開鍵取得 → RS256 検証）
+- [x] `iss` / `aud` / `exp` のクレーム検証
 - [ ] `nonce` パラメータ実装（replay 対策）
 - [ ] access_token の検証（Resource Server 分離時）
 

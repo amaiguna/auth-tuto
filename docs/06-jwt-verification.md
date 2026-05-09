@@ -1,8 +1,8 @@
-# 06. JWT 署名検証 — 概念編
+# 06. JWT 署名検証 — 概念と実装
 
 OIDC で受け取る ID Token (= JWT) を「本当に IdP が発行したものか」を確認する仕組み。docs/01〜05 では token を Keycloak から HTTPS で受け取って payload を base64 デコードしているだけ → JWT を「JSON コンテナ」としてしか扱っていなかった。本回から JWT を **「署名で身元保証された JSON」** として扱う段階に入る。
 
-実装はこの概念理解後に着手する (Sub A: JWKS フェッチ → Sub B: 署名検証 → Sub C: クレーム検証)。実装メモは完了後に本ドキュメントへ追記する。
+今回の実装では、Keycloak の JWKS から公開鍵を取得し、ID Token の RS256 署名を検証したうえで、`iss` / `aud` / `exp` クレームを確認するところまで進めた。`nonce` は次フェーズで扱う。
 
 ## 1. JWT の中身 — 3 パート構造
 
@@ -188,7 +188,7 @@ JWT 署名検証が解くのは別の脅威:
 
 ### JWKS のキャッシュ TTL
 
-定石は **数分 〜 1 時間**。短すぎると IdP に負荷、長すぎると鍵ローテーション直後に新キーの JWT を弾く時間が伸びる。Keycloak のデフォルトは Cache-Control ヘッダで `max-age=600` (10 分) を返してくる。本リポジトリでは Sub A で **起動時 1 回フェッチのみ** から始めて、後段で TTL キャッシュ化を検討する。
+定石は **数分 〜 1 時間**。短すぎると IdP に負荷、長すぎると鍵ローテーション直後に新キーの JWT を弾く時間が伸びる。Keycloak のデフォルトは Cache-Control ヘッダで `max-age=600` (10 分) を返してくる。今回の実装では単純化のため callback ごとに JWKS を取得しており、後段で TTL キャッシュ化を検討する。
 
 ### `kid` がない / アルゴリズムを `none` に偽装する攻撃
 
@@ -210,18 +210,181 @@ OIDC で受け取る token は 2 種類 (+ refresh):
 
 本リポジトリ Sub A〜C では **ID Token** の検証を扱う。Access Token の検証は Resource Server 分離フェーズで別途扱う (構造は同じ)。
 
+## 8. 今回の実装
+
+今回の実装では、`/callback` で token exchange 後に受け取った `id_token` を、セッション化する前に検証するようにした。
+
+```mermaid
+sequenceDiagram
+    participant Browser
+    participant BE as Backend
+    participant KC as Keycloak
+
+    Browser->>BE: GET /callback?code=...&state=...
+    BE->>BE: state Cookie と query state を照合
+    BE->>KC: POST /token
+    KC-->>BE: id_token
+    BE->>BE: JWT header から alg / kid を読む
+    BE->>KC: GET /certs
+    KC-->>BE: JWKS
+    BE->>BE: kid に一致する JWK を探す
+    BE->>BE: n/e から RSA 公開鍵を復元
+    BE->>BE: RS256 署名検証
+    BE->>BE: iss / aud / exp 検証
+    BE->>BE: 検証済み claims から sessionData を作成
+    BE-->>Browser: Set-Cookie: session_id=...
+```
+
+実装後の `handleCallback` は、HTTP ハンドラとして必要な流れだけを読む形に整理した。
+
+```go
+func handleCallback(c echo.Context) error {
+    if err := validateOAuthState(c); err != nil {
+        return c.NoContent(http.StatusBadRequest)
+    }
+
+    tokens, err := exchangeCodeForTokens(c.QueryParam("code"))
+    if err != nil {
+        return c.NoContent(http.StatusBadGateway)
+    }
+
+    claims, err := verifyIDToken(tokens.IDToken)
+    if err != nil {
+        if errors.Is(err, errOIDCUpstream) {
+            return c.NoContent(http.StatusBadGateway)
+        }
+        return c.NoContent(http.StatusUnauthorized)
+    }
+
+    sd := newSessionData(claims, tokens.IDToken)
+    id := uuid.NewString()
+
+    sessions[id] = sd
+    setSessionCookie(c, id)
+
+    return c.Redirect(http.StatusFound, frontendTopURL)
+}
+```
+
+### ファイル分割
+
+`main.go` にすべてを書き続けると、HTTP の流れ、OIDC、JWT、セッション、CSRF が混ざって見通しが悪くなるため、`package main` のままファイルだけ分割した。
+
+| ファイル | 役割 |
+|---|---|
+| `main.go` | Echo 起動、CORS、ルーティング |
+| `config.go` | client ID、redirect URI、Keycloak URL、context key |
+| `types.go` | `tokenResponse`、`idTokenClaims`、`jwtHeader`、`jwks`、`sessionData` |
+| `handlers.go` | `/login`、`/callback`、`/logout`、`/me`、`/csrf-token` |
+| `oidc.go` | token exchange、ID Token 検証、JWKS 取得、署名検証、claim 検証 |
+| `middleware.go` | `RequireSession`、`RequireCSRF` |
+| `session.go` | インメモリ session map |
+| `errors.go` | OIDC / OAuth state 周辺の内部エラー |
+
+パッケージは分けていない。学習段階では、ドメイン境界を強く切るよりも、同じ `main` パッケージ内で責務ごとにファイルを分ける方が読みやすい。
+
+### ID Token 検証の分割
+
+`verifyIDToken` は、JWT 検証の手順が上から読めるようにした。
+
+```go
+func verifyIDToken(idToken string) (idTokenClaims, error) {
+    parts := strings.Split(idToken, ".")
+    if len(parts) != 3 {
+        return idTokenClaims{}, errInvalidIDToken
+    }
+
+    header, err := parseJWTHeader(parts[0])
+    claims, err := parseIDTokenClaims(parts[1])
+    signatureBytes, err := base64.RawURLEncoding.DecodeString(parts[2])
+    keySet, err := fetchJWKS()
+    matchedKey, err := findJWKByKid(keySet, header.Kid)
+    publicKey, err := rsaPublicKeyFromJWK(*matchedKey)
+
+    if err := verifyJWTSignature(parts, publicKey, signatureBytes); err != nil {
+        return idTokenClaims{}, err
+    }
+
+    if err := validateIDTokenClaims(claims); err != nil {
+        return idTokenClaims{}, err
+    }
+
+    return claims, nil
+}
+```
+
+上のコードは流れを示す抜粋。実際のコードでは各 `err` を都度チェックしている。
+
+分割した関数の責務:
+
+| 関数 | 役割 |
+|---|---|
+| `exchangeCodeForTokens` | authorization code を Keycloak token endpoint へ送り、token response を得る |
+| `parseJWTHeader` | JWT header を base64url decode し、`alg == RS256` と `kid` の存在を確認 |
+| `parseIDTokenClaims` | payload を `idTokenClaims` に bind |
+| `fetchJWKS` | Keycloak の `/certs` から JWKS を取得 |
+| `findJWKByKid` | JWT header の `kid` と一致する JWK を探す |
+| `rsaPublicKeyFromJWK` | JWK の `n` / `e` から `*rsa.PublicKey` を作る |
+| `verifyJWTSignature` | `header.payload` の SHA-256 hash と signature を RS256 で検証 |
+| `validateIDTokenClaims` | `iss` / `aud` / `exp` を検証 |
+
+### claims と sessionData を分ける
+
+当初は payload の内容を `sessionData` に直接 bind していたが、今回 `idTokenClaims` と `sessionData` を分けた。
+
+```go
+type idTokenClaims struct {
+    Sub               string `json:"sub"`
+    Iss               string `json:"iss"`
+    Aud               string `json:"aud"`
+    Exp               int64  `json:"exp"`
+    PreferredUsername string `json:"preferred_username"`
+}
+
+type sessionData struct {
+    Sub               string `json:"sub"`
+    PreferredUsername string `json:"preferred_username"`
+    IDToken           string `json:"id_token"`
+    CSRFToken         string `json:"-"`
+}
+```
+
+`idTokenClaims` は **外部から来た ID Token の主張**。`sessionData` は **検証後に backend が保持する内部状態**。`iss` / `aud` / `exp` は検証には必要だが、ログイン後の `/me` や `/logout` で直接使わないため session には保存しない。
+
+`exp` は JWT 上では Unix timestamp の数値なので、`time.Time` ではなく `int64` として受ける。
+
+```go
+if claims.Exp <= time.Now().Unix() {
+    return errInvalidIDToken
+}
+```
+
+### 署名検証
+
+署名対象は、JWT の `header.payload` 部分そのもの。
+
+```go
+signingInput := parts[0] + "." + parts[1]
+hashed := sha256.Sum256([]byte(signingInput))
+
+err := rsa.VerifyPKCS1v15(publicKey, crypto.SHA256, hashed[:], signatureBytes)
+```
+
+`sha256.Sum256` は `[32]byte` を返す。一方 `VerifyPKCS1v15` は `[]byte` を要求するため、`hashed[:]` で配列全体をスライスとして渡している。
+
+### 今回まだやっていないこと
+
+- JWKS のキャッシュ。現状は callback ごとに `/certs` を取得する
+- `aud` が配列の場合の対応。現状は `string` 前提
+- `nonce` による replay 対策
+- `iat` / `nbf` など追加クレームの検証
+- 標準ライブラリや JWT ライブラリへの置き換え
+
 ## 次のフェーズ
 
-実装は 3 サブフェーズで進める:
-
-- **Sub A**: JWKS フェッチ + キャッシュ (検証はしない)
-- **Sub B**: RS256 署名検証を手書き
-- **Sub C**: クレーム検証 (`iss` / `aud` / `exp` / `iat`)
-
-各サブフェーズ完了後にこの doc に **「今回の実装」** セクションを追記する。
+ID Token の署名検証と最小限の claim 検証は実装済み。次は `nonce` パラメータを追加し、login request と ID Token の対応を検証する。
 
 その先:
 
-- **nonce** パラメータ (replay 対策、ID Token 検証の延長線。本 doc に追記する想定)
 - **Resource Server 分離 + access_token 検証** (docs/07 候補)
 - (発展) 標準ライブラリ (`go-jose`, `lestrrat-go/jwx`, `golang-jwt`) への置き換えと差分観察
